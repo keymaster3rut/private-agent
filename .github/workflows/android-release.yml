@@ -41,6 +41,237 @@ jobs:
           done
           ls -l assets/models
 
+      - name: Apply patch to Dart files
+        run: |
+          set -e
+          cat > /tmp/edits.json <<'EDITS_JSON'
+          {
+          "lib/screens/home_screen.dart": {
+          "marker": "WakeWordService",
+          "edits": [
+          [
+          "import 'package:flutter/material.dart';\n",
+          "import 'package:flutter/material.dart';\nimport 'package:shared_preferences/shared_preferences.dart';\n"
+          ],
+          [
+          "import '../services/voice_service.dart';\n",
+          "import '../services/voice_service.dart';\nimport '../services/voice_settings.dart';\nimport '../services/wake_word_service.dart';\n"
+          ],
+          [
+          "    onOverlayTask = (task) => _sendMessage(task);\n  }\n",
+          "    onOverlayTask = (task) => _sendMessage(task);\n    // Hot word (\"Hey Jarvis\") starts the same voice input as the mic button\n    WakeWordService.instance.onWake = _onWakeWord;\n  }\n"
+          ],
+          [
+          "    await _actionHandler.shizuku.checkAvailability();\n\n    if (mounted) {\n      setState(() {});\n    }\n  }\n",
+          "    await _actionHandler.shizuku.checkAvailability();\n    await _startHotwordIfEnabled();\n\n    if (mounted) {\n      setState(() {});\n    }\n  }\n\n  /// Re-enables the hot word on launch if it was turned on in Settings.\n  Future<void> _startHotwordIfEnabled() async {\n    final prefs = await SharedPreferences.getInstance();\n    if (!(prefs.getBool(VoiceSettings.keyHotwordEnabled) ?? false)) return;\n    final error = await WakeWordService.instance.start();\n    if (error != null && mounted) {\n      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(error)));\n    }\n  }\n\n  /// Called when the hot word is heard: starts the existing voice input.\n  Future<void> _onWakeWord() async {\n    if (!mounted || _isLoading) return;\n    if (VoiceSettings.listening.value) return;\n    _isListening = false; // sync UI state, then start listening\n    await _toggleVoice();\n  }\n"
+          ],
+          [
+          "        actions: [\n          IconButton(\n            icon: const Icon(Icons.add_comment_outlined),",
+          "        actions: [\n          // Mute / unmute the assistant's voice\n          ValueListenableBuilder<bool>(\n            valueListenable: VoiceSettings.muted,\n            builder: (context, muted, _) => IconButton(\n              icon: Icon(\n                muted ? Icons.volume_off_rounded : Icons.volume_up_rounded,\n              ),\n              tooltip: muted ? 'Unmute assistant voice' : 'Mute assistant voice',\n              onPressed: () => VoiceSettings.setMuted(!muted),\n            ),\n          ),\n          IconButton(\n            icon: const Icon(Icons.add_comment_outlined),"
+          ],
+          [
+          "    _voiceService.dispose();\n    _telegramService.dispose();\n",
+          "    WakeWordService.instance.onWake = null;\n    _voiceService.dispose();\n    _telegramService.dispose();\n"
+          ]
+          ]
+          },
+          "lib/screens/settings_screen.dart": {
+          "marker": "VoiceSettingsSection",
+          "edits": [
+          [
+          "import '../config/feature_flags.dart';\n",
+          "import '../config/feature_flags.dart';\nimport '../widgets/voice_settings_section.dart';\n"
+          ],
+          [
+          "          // 6. Accessibility Screen Control Card\n",
+          "          // Voice: Text-to-Speech + Hot word (added)\n          VoiceSettingsSection(buildCard: _buildSettingsCard, isDark: isDark),\n\n          // 6. Accessibility Screen Control Card\n"
+          ]
+          ]
+          }
+          }
+          EDITS_JSON
+          cat > /tmp/apply_patch.py <<'APPLY_PY'
+          import json, sys
+          data = json.load(open(sys.argv[1], encoding="utf-8"))
+          for path, spec in data.items():
+              s = open(path, encoding="utf-8").read()
+              if spec["marker"] in s:
+                  print("SUDAH TERPATCH:", path)
+                  continue
+              for old, new in spec["edits"]:
+                  if s.count(old) != 1:
+                      sys.exit("GAGAL: potongan tidak ditemukan tepat sekali di %s: %r" % (path, old[:70]))
+                  s = s.replace(old, new)
+              open(path, "w", encoding="utf-8").write(s)
+              print("DIPATCH:", path)
+          APPLY_PY
+          python3 /tmp/apply_patch.py /tmp/edits.json
+          cat > lib/services/voice_service.dart <<'VOICE_DART'
+          import 'package:speech_to_text/speech_to_text.dart' as stt;
+          import 'package:speech_to_text/speech_recognition_result.dart';
+          import 'package:flutter_tts/flutter_tts.dart';
+          import 'package:shared_preferences/shared_preferences.dart';
+          import 'voice_settings.dart';
+
+          class VoiceService {
+            final stt.SpeechToText _speech = stt.SpeechToText();
+            final FlutterTts _tts = FlutterTts();
+            bool _isInitialized = false;
+            bool _isListening = false;
+            bool _listenersAttached = false;
+
+            bool get isListening => _isListening;
+
+            Future<void> init() async {
+              if (_isInitialized) return;
+
+              _isInitialized = await _speech.initialize(
+                onError: (error) {
+                  _isListening = false;
+                  VoiceSettings.listening.value = false;
+                },
+                onStatus: (status) {
+                  // Added: lets the hot word resume when listening ends silently.
+                  if (status == 'done' || status == 'notListening') {
+                    VoiceSettings.listening.value = false;
+                  }
+                },
+              );
+
+              // Configure TTS (defaults identical to the original app)
+              await _tts.setLanguage('en-US');
+              await _tts.setSpeechRate(0.5);
+              await _tts.setVolume(1.0);
+              await _tts.setPitch(1.0);
+
+              // --- Added: saved TTS options, mute, speaking state ---
+              await VoiceSettings.loadMuted();
+              _tts.setStartHandler(() => VoiceSettings.speaking.value = true);
+              _tts.setCompletionHandler(() => VoiceSettings.speaking.value = false);
+              _tts.setCancelHandler(() => VoiceSettings.speaking.value = false);
+              _tts.setErrorHandler((message) => VoiceSettings.speaking.value = false);
+              await _applySavedTtsSettings();
+              if (!_listenersAttached) {
+                _listenersAttached = true;
+                VoiceSettings.muted.addListener(_onMuteChanged);
+                VoiceSettings.ttsRevision.addListener(_onTtsChanged);
+              }
+            }
+
+            /// Applies the TTS options saved from Settings. With nothing saved this
+            /// leaves the original defaults (en-US, rate 0.5, pitch 1.0) untouched.
+            Future<void> _applySavedTtsSettings() async {
+              final prefs = await SharedPreferences.getInstance();
+
+              final engine = prefs.getString(VoiceSettings.keyEngine);
+              if (engine != null && engine.isNotEmpty) {
+                try {
+                  await _tts.setEngine(engine);
+                } catch (_) {}
+              }
+
+              final language =
+                  prefs.getString(VoiceSettings.keyLanguage) ??
+                  VoiceSettings.defaultLanguage;
+              try {
+                await _tts.setLanguage(language);
+              } catch (_) {}
+
+              final voiceName = prefs.getString(VoiceSettings.keyVoiceName);
+              final voiceLocale = prefs.getString(VoiceSettings.keyVoiceLocale);
+              if (voiceName != null && voiceLocale != null) {
+                try {
+                  await _tts.setVoice({'name': voiceName, 'locale': voiceLocale});
+                } catch (_) {}
+              }
+
+              await _tts.setSpeechRate(
+                prefs.getDouble(VoiceSettings.keyRate) ?? VoiceSettings.defaultRate,
+              );
+              await _tts.setPitch(
+                prefs.getDouble(VoiceSettings.keyPitch) ?? VoiceSettings.defaultPitch,
+              );
+              await _tts.setVolume(1.0);
+            }
+
+            void _onTtsChanged() {
+              _applySavedTtsSettings();
+            }
+
+            void _onMuteChanged() {
+              if (VoiceSettings.muted.value) {
+                _tts.stop();
+                VoiceSettings.speaking.value = false;
+              }
+            }
+
+            /// Start listening for speech. Returns transcribed text via callback.
+            Future<void> startListening({
+              required Function(String) onResult,
+              required Function() onDone,
+            }) async {
+              if (!_isInitialized) await init();
+              if (!_isInitialized) return;
+
+              _isListening = true;
+              VoiceSettings.listening.value = true;
+
+              // Added: make sure the hot word has released the microphone.
+              final release = VoiceSettings.beforeListen;
+              if (release != null) {
+                try {
+                  await release();
+                } catch (_) {}
+              }
+
+              await _speech.listen(
+                onResult: (SpeechRecognitionResult result) {
+                  if (result.finalResult) {
+                    _isListening = false;
+                    VoiceSettings.listening.value = false;
+                    onResult(result.recognizedWords);
+                    onDone();
+                  }
+                },
+                listenOptions: stt.SpeechListenOptions(
+                  listenMode: stt.ListenMode.confirmation,
+                  partialResults: false,
+                ),
+              );
+            }
+
+            /// Stop listening
+            Future<void> stopListening() async {
+              _isListening = false;
+              VoiceSettings.listening.value = false;
+              await _speech.stop();
+            }
+
+            /// Speak text aloud (silent while muted)
+            Future<void> speak(String text) async {
+              if (text.isEmpty) return;
+              if (VoiceSettings.muted.value) return;
+              await _tts.speak(text);
+            }
+
+            /// Stop speaking
+            Future<void> stopSpeaking() async {
+              await _tts.stop();
+            }
+
+            void dispose() {
+              if (_listenersAttached) {
+                VoiceSettings.muted.removeListener(_onMuteChanged);
+                VoiceSettings.ttsRevision.removeListener(_onTtsChanged);
+                _listenersAttached = false;
+              }
+              _speech.stop();
+              _tts.stop();
+            }
+          }
+          VOICE_DART
+          echo "voice_service.dart ditulis ulang"
+
       - name: Verify patch is present
         run: |
           echo "=== Commit yang dibangun ==="
@@ -52,6 +283,10 @@ jobs:
           grep -n "VoiceSettingsSection" lib/screens/settings_screen.dart | head -3
           grep -n "open_wake_word\|assets/models" pubspec.yaml
           grep -n "FOREGROUND_SERVICE_MICROPHONE" android/app/src/main/AndroidManifest.xml
+          grep -q "WakeWordService" lib/screens/home_screen.dart
+          grep -q "VoiceSettingsSection" lib/screens/settings_screen.dart
+          grep -q "VoiceSettings" lib/services/voice_service.dart
+          echo "VERIFIKASI OK: semua perubahan ada"
 
       - name: Resolve dependencies
         run: flutter pub get
@@ -61,13 +296,13 @@ jobs:
 
       - name: Build universal APK
         run: |
-          flutter build apk --release --build-name=1.0.0-hotword --build-number=${{ github.run_number }}
+          flutter build apk --release --build-name=1.0.0-hotword2 --build-number=${{ github.run_number }}
           mkdir -p dist
           cp build/app/outputs/flutter-apk/app-release.apk dist/app-universal-release.apk
 
       - name: Build architecture-specific APKs
         run: |
-          flutter build apk --release --split-per-abi --build-name=1.0.0-hotword --build-number=${{ github.run_number }}
+          flutter build apk --release --split-per-abi --build-name=1.0.0-hotword2 --build-number=${{ github.run_number }}
           cp build/app/outputs/flutter-apk/app-arm64-v8a-release.apk dist/
           cp build/app/outputs/flutter-apk/app-armeabi-v7a-release.apk dist/
           cp build/app/outputs/flutter-apk/app-x86_64-release.apk dist/
