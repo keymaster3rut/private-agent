@@ -25,6 +25,22 @@ jobs:
           channel: stable
           cache: true
 
+      - name: Download hot word models
+        run: |
+          mkdir -p assets/models
+          for f in melspectrogram.onnx embedding_model.onnx hey_jarvis_v0.1.onnx; do
+            if [ -s "assets/models/$f" ]; then
+              echo "$f already present, skipping download"
+              continue
+            fi
+            curl -fL --retry 3 -o "assets/models/$f" \
+              "https://github.com/dscripka/openWakeWord/releases/download/v0.5.1/$f" \
+            || curl -fL --retry 3 -o "assets/models/$f" \
+              "https://github.com/dscripka/openWakeWord/raw/v0.5.1/openwakeword/resources/models/$f"
+            test "$(stat -c%s "assets/models/$f")" -gt 10000
+          done
+          ls -l assets/models
+
       - name: Resolve dependencies
         run: flutter pub get
 
@@ -50,3 +66,4 @@ jobs:
         with:
           name: private-agent-android
           path: dist/*
+          
