@@ -41,13 +41,13 @@ jobs:
           done
           ls -l assets/models
 
-      - name: Apply patch to Dart files
+      - name: Apply patch
         run: |
           set -e
           cat > /tmp/edits.json <<'EDITS_JSON'
           {
           "lib/screens/home_screen.dart": {
-          "marker": "WakeWordService",
+          "marker": "ExternalTriggerService",
           "edits": [
           [
           "import 'package:flutter/material.dart';\n",
@@ -55,15 +55,15 @@ jobs:
           ],
           [
           "import '../services/voice_service.dart';\n",
-          "import '../services/voice_service.dart';\nimport '../services/voice_settings.dart';\nimport '../services/wake_word_service.dart';\n"
+          "import '../services/voice_service.dart';\nimport '../services/voice_settings.dart';\nimport '../services/wake_word_service.dart';\nimport '../services/external_trigger_service.dart';\n"
           ],
           [
           "    onOverlayTask = (task) => _sendMessage(task);\n  }\n",
-          "    onOverlayTask = (task) => _sendMessage(task);\n    // Hot word (\"Hey Jarvis\") starts the same voice input as the mic button\n    WakeWordService.instance.onWake = _onWakeWord;\n  }\n"
+          "    onOverlayTask = (task) => _sendMessage(task);\n    // Hot word (\"Hey Jarvis\") starts the same voice input as the mic button\n    WakeWordService.instance.onWake = _onWakeWord;\n    // External trigger (Tasker hotword plugin etc.) does the same\n    ExternalTriggerService.instance.init();\n    ExternalTriggerService.instance.onTrigger = _onWakeWord;\n  }\n"
           ],
           [
           "    await _actionHandler.shizuku.checkAvailability();\n\n    if (mounted) {\n      setState(() {});\n    }\n  }\n",
-          "    await _actionHandler.shizuku.checkAvailability();\n    await _startHotwordIfEnabled();\n\n    if (mounted) {\n      setState(() {});\n    }\n  }\n\n  /// Re-enables the hot word on launch if it was turned on in Settings.\n  Future<void> _startHotwordIfEnabled() async {\n    final prefs = await SharedPreferences.getInstance();\n    if (!(prefs.getBool(VoiceSettings.keyHotwordEnabled) ?? false)) return;\n    final error = await WakeWordService.instance.start();\n    if (error != null && mounted) {\n      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(error)));\n    }\n  }\n\n  /// Called when the hot word is heard: starts the existing voice input.\n  Future<void> _onWakeWord() async {\n    if (!mounted || _isLoading) return;\n    if (VoiceSettings.listening.value) return;\n    _isListening = false; // sync UI state, then start listening\n    await _toggleVoice();\n  }\n"
+          "    await _actionHandler.shizuku.checkAvailability();\n    await _startHotwordIfEnabled();\n    await ExternalTriggerService.instance.checkInitialTrigger();\n\n    if (mounted) {\n      setState(() {});\n    }\n  }\n\n  /// Re-enables the hot word on launch if it was turned on in Settings.\n  Future<void> _startHotwordIfEnabled() async {\n    final prefs = await SharedPreferences.getInstance();\n    if (!(prefs.getBool(VoiceSettings.keyHotwordEnabled) ?? false)) return;\n    final error = await WakeWordService.instance.start();\n    if (error != null && mounted) {\n      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(error)));\n    }\n  }\n\n  /// Called when the hot word is heard: starts the existing voice input.\n  Future<void> _onWakeWord() async {\n    if (!mounted || _isLoading) return;\n    if (VoiceSettings.listening.value) return;\n    _isListening = false; // sync UI state, then start listening\n    await _toggleVoice();\n  }\n"
           ],
           [
           "        actions: [\n          IconButton(\n            icon: const Icon(Icons.add_comment_outlined),",
@@ -71,20 +71,42 @@ jobs:
           ],
           [
           "    _voiceService.dispose();\n    _telegramService.dispose();\n",
-          "    WakeWordService.instance.onWake = null;\n    _voiceService.dispose();\n    _telegramService.dispose();\n"
+          "    WakeWordService.instance.onWake = null;\n    ExternalTriggerService.instance.onTrigger = null;\n    _voiceService.dispose();\n    _telegramService.dispose();\n"
           ]
           ]
           },
           "lib/screens/settings_screen.dart": {
-          "marker": "VoiceSettingsSection",
+          "marker": "ExternalTriggerSection",
           "edits": [
           [
           "import '../config/feature_flags.dart';\n",
-          "import '../config/feature_flags.dart';\nimport '../widgets/voice_settings_section.dart';\n"
+          "import '../config/feature_flags.dart';\nimport '../widgets/voice_settings_section.dart';\nimport '../widgets/external_trigger_section.dart';\n"
           ],
           [
           "          // 6. Accessibility Screen Control Card\n",
-          "          // Voice: Text-to-Speech + Hot word (added)\n          VoiceSettingsSection(buildCard: _buildSettingsCard, isDark: isDark),\n\n          // 6. Accessibility Screen Control Card\n"
+          "          // Voice: Text-to-Speech + Hot word (added)\n          VoiceSettingsSection(buildCard: _buildSettingsCard, isDark: isDark),\n\n          // Tasker hotword plugin / external trigger (added)\n          ExternalTriggerSection(buildCard: _buildSettingsCard, isDark: isDark),\n\n          // 6. Accessibility Screen Control Card\n"
+          ]
+          ]
+          },
+          "android/app/src/main/kotlin/com/orailnoor/privateagent/MainActivity.kt": {
+          "marker": "com.privateagent/external_trigger",
+          "edits": [
+          [
+          "    private var overlayView: View? = null\n",
+          "    private var overlayView: View? = null\n    private var triggerChannel: MethodChannel? = null\n    private var pendingStartVoice: Boolean = false\n"
+          ],
+          [
+          "        registerAccessibilityChannel(flutterEngine, this)\n    }\n",
+          "        registerAccessibilityChannel(flutterEngine, this)\n\n        // External trigger (Tasker / automation apps): intent START_VOICE\n        pendingStartVoice = isStartVoiceIntent(intent)\n        triggerChannel = MethodChannel(flutterEngine.dartExecutor.binaryMessenger, \"com.privateagent/external_trigger\")\n        triggerChannel?.setMethodCallHandler { call, result ->\n            when (call.method) {\n                \"consumeInitialTrigger\" -> {\n                    val pending = pendingStartVoice\n                    pendingStartVoice = false\n                    result.success(pending)\n                }\n                \"getDeviceState\" -> {\n                    val pm = getSystemService(android.content.Context.POWER_SERVICE) as android.os.PowerManager\n                    val bm = getSystemService(android.content.Context.BATTERY_SERVICE) as android.os.BatteryManager\n                    result.success(mapOf(\"screenOn\" to pm.isInteractive, \"charging\" to bm.isCharging))\n                }\n                else -> result.notImplemented()\n            }\n        }\n    }\n\n    private fun isStartVoiceIntent(i: Intent?): Boolean {\n        return i?.action == \"com.orailnoor.privateagent.START_VOICE\"\n    }\n\n    override fun onNewIntent(intent: Intent) {\n        super.onNewIntent(intent)\n        if (isStartVoiceIntent(intent)) {\n            triggerChannel?.invokeMethod(\"startVoice\", null)\n        }\n    }\n"
+          ]
+          ]
+          },
+          "android/app/src/main/AndroidManifest.xml": {
+          "marker": "com.orailnoor.privateagent.START_VOICE",
+          "edits": [
+          [
+          "                <category android:name=\"android.intent.category.LAUNCHER\"/>\n            </intent-filter>\n",
+          "                <category android:name=\"android.intent.category.LAUNCHER\"/>\n            </intent-filter>\n            <!-- External trigger: automation apps (Tasker, MacroDroid...) start voice input -->\n            <intent-filter>\n                <action android:name=\"com.orailnoor.privateagent.START_VOICE\" />\n                <category android:name=\"android.intent.category.DEFAULT\" />\n            </intent-filter>\n"
           ]
           ]
           }
@@ -270,7 +292,262 @@ jobs:
             }
           }
           VOICE_DART
-          echo "voice_service.dart ditulis ulang"
+          cat > lib/services/external_trigger_service.dart <<'ETS_DART'
+          import 'package:flutter/foundation.dart';
+          import 'package:flutter/services.dart';
+          import 'package:shared_preferences/shared_preferences.dart';
+
+          /// Lets automation apps (Tasker with a hotword plugin, MacroDroid, adb, ...)
+          /// start the app's voice input by sending the intent
+          /// `com.orailnoor.privateagent.START_VOICE` to MainActivity.
+          class ExternalTriggerService {
+            ExternalTriggerService._();
+            static final ExternalTriggerService instance = ExternalTriggerService._();
+
+            static const String actionName = 'com.orailnoor.privateagent.START_VOICE';
+            static const String packageName = 'com.orailnoor.privateagent';
+            static const String className = 'com.orailnoor.privateagent.MainActivity';
+
+            static const String keyEnabled = 'external_trigger_enabled';
+            static const String keyMode = 'external_trigger_mode';
+            static const String modeAlways = 'always';
+            static const String modeScreenOn = 'screen_on';
+            static const String modeCharging = 'charging';
+
+            static const MethodChannel _channel = MethodChannel(
+              'com.privateagent/external_trigger',
+            );
+
+            /// Called when an accepted trigger arrives (starts voice input).
+            VoidCallback? onTrigger;
+            bool _initialized = false;
+
+            /// Starts listening for triggers sent while the app is already running.
+            void init() {
+              if (_initialized) return;
+              _initialized = true;
+              _channel.setMethodCallHandler((call) async {
+                if (call.method == 'startVoice') {
+                  await handleTrigger();
+                }
+                return null;
+              });
+            }
+
+            /// Handles a trigger that launched the app from scratch.
+            Future<void> checkInitialTrigger() async {
+              try {
+                final pending =
+                    await _channel.invokeMethod<bool>('consumeInitialTrigger') ?? false;
+                if (pending) await handleTrigger();
+              } catch (_) {}
+            }
+
+            /// Returns null when a trigger should run, otherwise a short reason why it
+            /// would be ignored (feature off, screen off, not charging).
+            Future<String?> evaluate() async {
+              final prefs = await SharedPreferences.getInstance();
+              if (!(prefs.getBool(keyEnabled) ?? false)) {
+                return 'Ignored: external trigger is turned off.';
+              }
+              final mode = prefs.getString(keyMode) ?? modeAlways;
+              if (mode == modeAlways) return null;
+
+              var screenOn = true;
+              var charging = false;
+              try {
+                final state = await _channel.invokeMapMethod<String, dynamic>(
+                  'getDeviceState',
+                );
+                screenOn = state?['screenOn'] == true;
+                charging = state?['charging'] == true;
+              } catch (_) {}
+
+              if (mode == modeScreenOn && !screenOn) return 'Ignored: screen is off.';
+              if (mode == modeCharging && !charging) {
+                return 'Ignored: device is not charging.';
+              }
+              return null;
+            }
+
+            Future<void> handleTrigger() async {
+              final reason = await evaluate();
+              if (reason == null) onTrigger?.call();
+            }
+          }
+          ETS_DART
+          mkdir -p lib/widgets
+          cat > lib/widgets/external_trigger_section.dart <<'ETSEC_DART'
+          import 'package:flutter/material.dart';
+          import 'package:flutter/services.dart';
+          import 'package:shared_preferences/shared_preferences.dart';
+
+          import '../services/external_trigger_service.dart';
+          import 'voice_settings_section.dart' show SettingsCardBuilder;
+
+          /// Settings card for the external trigger (Tasker hotword plugin etc.).
+          class ExternalTriggerSection extends StatefulWidget {
+            final SettingsCardBuilder buildCard;
+            final bool isDark;
+
+            const ExternalTriggerSection({
+              super.key,
+              required this.buildCard,
+              required this.isDark,
+            });
+
+            @override
+            State<ExternalTriggerSection> createState() => _ExternalTriggerSectionState();
+          }
+
+          class _ExternalTriggerSectionState extends State<ExternalTriggerSection> {
+            bool _enabled = false;
+            String _mode = ExternalTriggerService.modeAlways;
+            bool _loading = true;
+
+            @override
+            void initState() {
+              super.initState();
+              _load();
+            }
+
+            Future<void> _load() async {
+              final prefs = await SharedPreferences.getInstance();
+              _enabled = prefs.getBool(ExternalTriggerService.keyEnabled) ?? false;
+              _mode =
+                  prefs.getString(ExternalTriggerService.keyMode) ??
+                  ExternalTriggerService.modeAlways;
+              if (mounted) setState(() => _loading = false);
+            }
+
+            Future<void> _save() async {
+              final prefs = await SharedPreferences.getInstance();
+              await prefs.setBool(ExternalTriggerService.keyEnabled, _enabled);
+              await prefs.setString(ExternalTriggerService.keyMode, _mode);
+            }
+
+            void _snack(String message) {
+              if (!mounted) return;
+              ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(message)));
+            }
+
+            Future<void> _test() async {
+              final reason = await ExternalTriggerService.instance.evaluate();
+              if (reason == null) {
+                _snack('Trigger accepted: starting voice input.');
+                ExternalTriggerService.instance.onTrigger?.call();
+              } else {
+                _snack(reason);
+              }
+            }
+
+            @override
+            Widget build(BuildContext context) {
+              if (_loading) return const SizedBox.shrink();
+
+              return widget.buildCard(
+                icon: Icons.extension_outlined,
+                title: 'Tasker hotword plugin',
+                subtitle: 'Let Tasker (or another automation app) start voice input',
+                isDark: widget.isDark,
+                children: [
+                  SwitchListTile(
+                    title: const Text('Enable external trigger'),
+                    subtitle: const Text(
+                      'When off, trigger intents from other apps are ignored.',
+                    ),
+                    value: _enabled,
+                    contentPadding: EdgeInsets.zero,
+                    onChanged: (v) async {
+                      setState(() => _enabled = v);
+                      await _save();
+                    },
+                  ),
+                  const SizedBox(height: 8),
+                  InputDecorator(
+                    decoration: InputDecoration(
+                      labelText: 'Active when',
+                      border: OutlineInputBorder(
+                        borderRadius: BorderRadius.circular(12),
+                      ),
+                      contentPadding: const EdgeInsets.symmetric(
+                        horizontal: 12,
+                        vertical: 4,
+                      ),
+                    ),
+                    child: DropdownButtonHideUnderline(
+                      child: DropdownButton<String>(
+                        isExpanded: true,
+                        value: _mode,
+                        items: const [
+                          DropdownMenuItem(
+                            value: ExternalTriggerService.modeAlways,
+                            child: Text('Always'),
+                          ),
+                          DropdownMenuItem(
+                            value: ExternalTriggerService.modeScreenOn,
+                            child: Text('Only when the screen is on'),
+                          ),
+                          DropdownMenuItem(
+                            value: ExternalTriggerService.modeCharging,
+                            child: Text('Only while charging'),
+                          ),
+                        ],
+                        onChanged: (v) async {
+                          if (v == null) return;
+                          setState(() => _mode = v);
+                          await _save();
+                        },
+                      ),
+                    ),
+                  ),
+                  const SizedBox(height: 8),
+                  const Text(
+                    'This only decides whether a trigger is accepted. The hotword '
+                    'plugin itself keeps listening inside Tasker, so to save battery '
+                    'also limit the plugin\'s profile in Tasker (for example with a '
+                    'Display State = On condition).',
+                    style: TextStyle(fontSize: 12),
+                  ),
+                  const SizedBox(height: 12),
+                  const Text(
+                    'Tasker setup: Action > System > Send Intent',
+                    style: TextStyle(fontWeight: FontWeight.w600),
+                  ),
+                  const SelectableText(
+                    'Action: ${ExternalTriggerService.actionName}\n'
+                    'Package: ${ExternalTriggerService.packageName}\n'
+                    'Class: ${ExternalTriggerService.className}\n'
+                    'Target: Activity',
+                    style: TextStyle(fontSize: 12),
+                  ),
+                  const SizedBox(height: 8),
+                  Wrap(
+                    spacing: 8,
+                    children: [
+                      OutlinedButton.icon(
+                        onPressed: _test,
+                        icon: const Icon(Icons.play_arrow_rounded, size: 18),
+                        label: const Text('Test trigger'),
+                      ),
+                      OutlinedButton.icon(
+                        onPressed: () async {
+                          await Clipboard.setData(
+                            const ClipboardData(text: ExternalTriggerService.actionName),
+                          );
+                          _snack('Action copied.');
+                        },
+                        icon: const Icon(Icons.copy_rounded, size: 18),
+                        label: const Text('Copy action'),
+                      ),
+                    ],
+                  ),
+                ],
+              );
+            }
+          }
+          ETSEC_DART
+          echo "Patch selesai"
 
       - name: Verify patch is present
         run: |
@@ -286,6 +563,12 @@ jobs:
           grep -q "WakeWordService" lib/screens/home_screen.dart
           grep -q "VoiceSettingsSection" lib/screens/settings_screen.dart
           grep -q "VoiceSettings" lib/services/voice_service.dart
+          grep -q "ExternalTriggerService" lib/screens/home_screen.dart
+          grep -q "ExternalTriggerSection" lib/screens/settings_screen.dart
+          grep -q "external_trigger" android/app/src/main/kotlin/com/orailnoor/privateagent/MainActivity.kt
+          grep -q "START_VOICE" android/app/src/main/AndroidManifest.xml
+          test -f lib/services/external_trigger_service.dart
+          test -f lib/widgets/external_trigger_section.dart
           echo "VERIFIKASI OK: semua perubahan ada"
 
       - name: Resolve dependencies
@@ -296,13 +579,13 @@ jobs:
 
       - name: Build universal APK
         run: |
-          flutter build apk --release --build-name=1.0.0-hotword2 --build-number=${{ github.run_number }}
+          flutter build apk --release --build-name=1.0.0-hotword3 --build-number=${{ github.run_number }}
           mkdir -p dist
           cp build/app/outputs/flutter-apk/app-release.apk dist/app-universal-release.apk
 
       - name: Build architecture-specific APKs
         run: |
-          flutter build apk --release --split-per-abi --build-name=1.0.0-hotword2 --build-number=${{ github.run_number }}
+          flutter build apk --release --split-per-abi --build-name=1.0.0-hotword3 --build-number=${{ github.run_number }}
           cp build/app/outputs/flutter-apk/app-arm64-v8a-release.apk dist/
           cp build/app/outputs/flutter-apk/app-armeabi-v7a-release.apk dist/
           cp build/app/outputs/flutter-apk/app-x86_64-release.apk dist/
