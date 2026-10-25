@@ -109,6 +109,35 @@ jobs:
           "                <category android:name=\"android.intent.category.LAUNCHER\"/>\n            </intent-filter>\n            <!-- External trigger: automation apps (Tasker, MacroDroid...) start voice input -->\n            <intent-filter>\n                <action android:name=\"com.orailnoor.privateagent.START_VOICE\" />\n                <category android:name=\"android.intent.category.DEFAULT\" />\n            </intent-filter>\n"
           ]
           ]
+          },
+          "lib/services/task_executor.dart": {
+          "marker": "_clickSmart",
+          "edits": [
+          [
+          "        case 'click_text':\n          final text = params['text'] as String? ?? '';\n          success = await _screenService.clickByText(text);\n",
+          "        case 'click_text':\n          final text = params['text'] as String? ?? '';\n          success = await _clickSmart(text);\n"
+          ],
+          [
+          "          final text = params['text'] as String? ?? '';\n          final hint = params['field_hint'] as String?;\n          success = await _screenService.typeText(text, fieldHint: hint);\n          actionResult = success ? 'Typed \"$text\"' : 'Could not type text';\n",
+          "          final text = params['text'] as String? ?? '';\n          final hint = params['field_hint'] as String?;\n          success = await _screenService.typeText(text, fieldHint: hint);\n          actionResult = success ? 'Typed \"$text\"' : 'Could not type text';\n          if (success && await _autoSubmitIfSearchField(hint)) {\n            actionResult = 'Typed \"$text\" and submitted the search';\n          }\n"
+          ],
+          [
+          "- After typing a search query, use `press_enter` once. If the screen does not change, click the exact visible suggestion text. Do not repeat the same submit action more than twice.\n",
+          "- After typing a search query, use `press_enter` once. If the screen does not change, click the exact visible suggestion text. Do not repeat the same submit action more than twice.\n- If the previous action result says the search was submitted, do NOT press_enter again. Look at the new screen and pick a result.\n"
+          ],
+          [
+          "      final recovery = await _recoveryEngine.diagnose(action, screenContent);\n",
+          "      final recovery = await _recoveryEngine.diagnose(\n        action,\n        screenContent,\n        failureCount: consecutiveFailures,\n      );\n"
+          ],
+          [
+          "          final dir = recovery.params['direction'] ?? 'down';\n          if (dir == 'down') {\n            await _shizukuService.runCommand(\n              'input swipe 540 1800 540 600 600',\n            );\n          } else {\n            await _shizukuService.runCommand(\n              'input swipe 540 600 540 1800 600',\n            );\n          }\n",
+          "          final dir = (recovery.params['direction'] ?? 'down').toString();\n          await _performScroll(dir);\n"
+          ],
+          [
+          "  void _report(String message) {\n",
+          "  /// Removes the \"...\" the screen dump adds to truncated labels.\n  String _stripEllipsis(String text) {\n    var t = text.trim();\n    while (t.endsWith('...') || t.endsWith('\\u2026')) {\n      t = t.endsWith('...')\n          ? t.substring(0, t.length - 3)\n          : t.substring(0, t.length - 1);\n      t = t.trim();\n    }\n    return t;\n  }\n\n  int _commonPrefixLength(String a, String b) {\n    final n = a.length < b.length ? a.length : b.length;\n    var i = 0;\n    while (i < n && a.codeUnitAt(i) == b.codeUnitAt(i)) {\n      i++;\n    }\n    return i;\n  }\n\n  /// Click by text. If that fails, retry without the truncation dots, then\n  /// fall back to tapping the center of the best-matching element found in\n  /// the current screen dump.\n  Future<bool> _clickSmart(String text) async {\n    if (await _screenService.clickByText(text)) return true;\n\n    final cleaned = _stripEllipsis(text);\n    if (cleaned.isEmpty) return false;\n    if (cleaned != text && await _screenService.clickByText(cleaned)) {\n      return true;\n    }\n\n    try {\n      final nodes = await _screenService.dumpScreen();\n      final target = cleaned.toLowerCase();\n      double bestScore = 0;\n      double bestX = 0;\n      double bestY = 0;\n\n      for (final node in nodes) {\n        final bounds = node['bounds'];\n        if (bounds is! Map) continue;\n        final left = (bounds['left'] as num?)?.toDouble() ?? 0;\n        final top = (bounds['top'] as num?)?.toDouble() ?? 0;\n        final right = (bounds['right'] as num?)?.toDouble() ?? 0;\n        final bottom = (bounds['bottom'] as num?)?.toDouble() ?? 0;\n        if (right <= left || bottom <= top) continue;\n\n        for (final raw in [node['text'], node['contentDescription']]) {\n          final label = (raw is String ? raw : '').trim().toLowerCase();\n          if (label.isEmpty) continue;\n\n          double score = 0;\n          if (label.contains(target)) {\n            score = 3;\n          } else if (label.length >= 6 && target.contains(label)) {\n            score = 2;\n          } else if (_commonPrefixLength(label, target) >= 12) {\n            score = 1;\n          }\n          if (score > 0 && node['isClickable'] == true) score += 0.5;\n\n          if (score > bestScore) {\n            bestScore = score;\n            bestX = (left + right) / 2;\n            bestY = (top + bottom) / 2;\n          }\n        }\n      }\n\n      if (bestScore > 0) {\n        return await _screenService.clickAt(bestX, bestY);\n      }\n    } catch (_) {}\n    return false;\n  }\n\n  /// After typing, presses the search/Enter key when the field is a search box\n  /// (recognized by its view id or label), so the search starts right away.\n  Future<bool> _autoSubmitIfSearchField(String? hint) async {\n    try {\n      final searchWords = RegExp(\n        r'search|cari|telusuri|find|query|url_bar|omnibox',\n        caseSensitive: false,\n      );\n      var isSearch = hint != null && searchWords.hasMatch(hint);\n\n      if (!isSearch) {\n        final nodes = await _screenService.dumpScreen();\n        for (final node in nodes) {\n          if (node['isEditable'] != true) continue;\n          final idAndLabel = '${node['viewId'] ?? ''} '\n              '${node['contentDescription'] ?? ''}';\n          if (searchWords.hasMatch(idAndLabel)) {\n            isSearch = true;\n            break;\n          }\n        }\n      }\n      if (!isSearch) return false;\n\n      await Future.delayed(const Duration(milliseconds: 600));\n      final ok = await _submitKeyboardAction();\n      if (ok) await Future.delayed(const Duration(milliseconds: 1500));\n      return ok;\n    } catch (_) {\n      return false;\n    }\n  }\n\n  void _report(String message) {\n"
+          ]
+          ]
           }
           }
           EDITS_JSON
@@ -547,6 +576,106 @@ jobs:
             }
           }
           ETSEC_DART
+          cat > lib/services/recovery_engine.dart <<'RECOVERY_DART'
+          class RecoveryAction {
+            final String action;
+            final Map<String, dynamic> params;
+            final String description;
+
+            RecoveryAction({
+              required this.action,
+              required this.params,
+              required this.description,
+            });
+          }
+
+          class RecoveryEngine {
+            /// Diagnoses the failure and suggests a recovery action based on the last
+            /// action and current screen dump.
+            ///
+            /// [failureCount] is how many times in a row the same action has failed.
+            /// Going Back is only used after repeated failures, so a single failed
+            /// click no longer throws the agent out of the screen it is working on.
+            Future<RecoveryAction> diagnose(
+              String lastFailedAction,
+              String screenContent, {
+              int failureCount = 1,
+            }) async {
+              final lowerScreen = screenContent.toLowerCase();
+
+              // 1. A real loading indicator is visible -> wait
+              if (RegExp(r'\b(progressbar|spinner|loading)\b').hasMatch(lowerScreen)) {
+                return RecoveryAction(
+                  action: 'wait',
+                  params: {},
+                  description: 'App seems to be loading, waiting...',
+                );
+              }
+
+              // 2. Keyboard is likely covering elements -> Press back to dismiss
+              //    (only on the first failures, so we do not keep pressing back)
+              if (failureCount <= 2 &&
+                  (lowerScreen.contains('gboard') || lowerScreen.contains('keyboard'))) {
+                return RecoveryAction(
+                  action: 'press_back',
+                  params: {},
+                  description: 'Keyboard might be blocking the screen, dismissing it.',
+                );
+              }
+
+              // 3. A click failed: look further down/up the same screen instead of
+              //    leaving it. The compressed screen dump marks scrollable elements
+              //    with a "scroll" tag, the full dump with "scrollable".
+              if (lastFailedAction == 'click_text' || lastFailedAction == 'click_at') {
+                final scrollable =
+                    lowerScreen.contains('scrollable') ||
+                    RegExp(r'[\[,]scroll[\],]').hasMatch(lowerScreen);
+                if (scrollable && failureCount <= 3) {
+                  return RecoveryAction(
+                    action: 'scroll',
+                    params: {'direction': failureCount >= 3 ? 'up' : 'down'},
+                    description: 'Click failed, scrolling to look for the target.',
+                  );
+                }
+                if (failureCount <= 2) {
+                  return RecoveryAction(
+                    action: 'wait',
+                    params: {},
+                    description: 'Click failed, waiting and re-reading the screen.',
+                  );
+                }
+                return RecoveryAction(
+                  action: 'press_back',
+                  params: {},
+                  description: 'Click failed repeatedly, pressing back to try another way.',
+                );
+              }
+
+              // 4. Could not open the app -> go home to try a different approach
+              if (lastFailedAction == 'open_app') {
+                return RecoveryAction(
+                  action: 'press_home',
+                  params: {},
+                  description: 'Failed to open app, going home to try a different approach.',
+                );
+              }
+
+              // 5. Generic failure: retry on the same screen first, back only if it persists
+              if (failureCount <= 2) {
+                return RecoveryAction(
+                  action: 'wait',
+                  params: {},
+                  description: 'Action failed, waiting and retrying on the same screen.',
+                );
+              }
+              return RecoveryAction(
+                action: 'press_back',
+                params: {},
+                description: 'Repeated failure, pressing back to recover.',
+              );
+            }
+          }
+          RECOVERY_DART
           echo "Patch selesai"
 
       - name: Verify patch is present
@@ -569,6 +698,9 @@ jobs:
           grep -q "START_VOICE" android/app/src/main/AndroidManifest.xml
           test -f lib/services/external_trigger_service.dart
           test -f lib/widgets/external_trigger_section.dart
+          grep -q "_clickSmart" lib/services/task_executor.dart
+          grep -q "_autoSubmitIfSearchField" lib/services/task_executor.dart
+          grep -q "failureCount" lib/services/recovery_engine.dart
           echo "VERIFIKASI OK: semua perubahan ada"
 
       - name: Resolve dependencies
@@ -579,13 +711,13 @@ jobs:
 
       - name: Build universal APK
         run: |
-          flutter build apk --release --build-name=1.0.0-hotword3 --build-number=${{ github.run_number }}
+          flutter build apk --release --build-name=1.0.0-hotword4 --build-number=${{ github.run_number }}
           mkdir -p dist
           cp build/app/outputs/flutter-apk/app-release.apk dist/app-universal-release.apk
 
       - name: Build architecture-specific APKs
         run: |
-          flutter build apk --release --split-per-abi --build-name=1.0.0-hotword3 --build-number=${{ github.run_number }}
+          flutter build apk --release --split-per-abi --build-name=1.0.0-hotword4 --build-number=${{ github.run_number }}
           cp build/app/outputs/flutter-apk/app-arm64-v8a-release.apk dist/
           cp build/app/outputs/flutter-apk/app-armeabi-v7a-release.apk dist/
           cp build/app/outputs/flutter-apk/app-x86_64-release.apk dist/
