@@ -17,6 +17,11 @@ dependencies:
   speech_to_text: ^7.0.0
   flutter_tts: ^4.2.0
 
+  # Hot word "Hey Jarvis" (added)
+  open_wake_word: ^0.3.0
+  record: ^6.0.0
+  flutter_foreground_task: ^8.11.0
+
   # App management
   installed_apps: ^1.5.0
   url_launcher: ^6.3.0
@@ -66,3 +71,4 @@ flutter:
   uses-material-design: true
   assets:
     - assets/
+    - assets/models/
