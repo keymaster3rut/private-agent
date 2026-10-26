@@ -44,663 +44,275 @@ jobs:
       - name: Apply patch
         run: |
           set -e
-          cat > /tmp/edits.json <<'EDITS_JSON'
-          {
-          "lib/screens/home_screen.dart": {
-          "marker": "ExternalTriggerService",
-          "edits": [
-          [
-          "import 'package:flutter/material.dart';\n",
-          "import 'package:flutter/material.dart';\nimport 'package:shared_preferences/shared_preferences.dart';\n"
-          ],
-          [
-          "import '../services/voice_service.dart';\n",
-          "import '../services/voice_service.dart';\nimport '../services/voice_settings.dart';\nimport '../services/wake_word_service.dart';\nimport '../services/external_trigger_service.dart';\n"
-          ],
-          [
-          "    onOverlayTask = (task) => _sendMessage(task);\n  }\n",
-          "    onOverlayTask = (task) => _sendMessage(task);\n    // Hot word (\"Hey Jarvis\") starts the same voice input as the mic button\n    WakeWordService.instance.onWake = _onWakeWord;\n    // External trigger (Tasker hotword plugin etc.) does the same\n    ExternalTriggerService.instance.init();\n    ExternalTriggerService.instance.onTrigger = _onWakeWord;\n  }\n"
-          ],
-          [
-          "    await _actionHandler.shizuku.checkAvailability();\n\n    if (mounted) {\n      setState(() {});\n    }\n  }\n",
-          "    await _actionHandler.shizuku.checkAvailability();\n    await _startHotwordIfEnabled();\n    await ExternalTriggerService.instance.checkInitialTrigger();\n\n    if (mounted) {\n      setState(() {});\n    }\n  }\n\n  /// Re-enables the hot word on launch if it was turned on in Settings.\n  Future<void> _startHotwordIfEnabled() async {\n    final prefs = await SharedPreferences.getInstance();\n    if (!(prefs.getBool(VoiceSettings.keyHotwordEnabled) ?? false)) return;\n    final error = await WakeWordService.instance.start();\n    if (error != null && mounted) {\n      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(error)));\n    }\n  }\n\n  /// Called when the hot word is heard: starts the existing voice input.\n  Future<void> _onWakeWord() async {\n    if (!mounted || _isLoading) return;\n    if (VoiceSettings.listening.value) return;\n    _isListening = false; // sync UI state, then start listening\n    await _toggleVoice();\n  }\n"
-          ],
-          [
-          "        actions: [\n          IconButton(\n            icon: const Icon(Icons.add_comment_outlined),",
-          "        actions: [\n          // Mute / unmute the assistant's voice\n          ValueListenableBuilder<bool>(\n            valueListenable: VoiceSettings.muted,\n            builder: (context, muted, _) => IconButton(\n              icon: Icon(\n                muted ? Icons.volume_off_rounded : Icons.volume_up_rounded,\n              ),\n              tooltip: muted ? 'Unmute assistant voice' : 'Mute assistant voice',\n              onPressed: () => VoiceSettings.setMuted(!muted),\n            ),\n          ),\n          IconButton(\n            icon: const Icon(Icons.add_comment_outlined),"
-          ],
-          [
-          "    _voiceService.dispose();\n    _telegramService.dispose();\n",
-          "    WakeWordService.instance.onWake = null;\n    ExternalTriggerService.instance.onTrigger = null;\n    _voiceService.dispose();\n    _telegramService.dispose();\n"
-          ]
-          ]
-          },
-          "lib/screens/settings_screen.dart": {
-          "marker": "ExternalTriggerSection",
-          "edits": [
-          [
-          "import '../config/feature_flags.dart';\n",
-          "import '../config/feature_flags.dart';\nimport '../widgets/voice_settings_section.dart';\nimport '../widgets/external_trigger_section.dart';\n"
-          ],
-          [
-          "          // 6. Accessibility Screen Control Card\n",
-          "          // Voice: Text-to-Speech + Hot word (added)\n          VoiceSettingsSection(buildCard: _buildSettingsCard, isDark: isDark),\n\n          // Tasker hotword plugin / external trigger (added)\n          ExternalTriggerSection(buildCard: _buildSettingsCard, isDark: isDark),\n\n          // 6. Accessibility Screen Control Card\n"
-          ]
-          ]
-          },
-          "android/app/src/main/kotlin/com/orailnoor/privateagent/MainActivity.kt": {
-          "marker": "com.privateagent/external_trigger",
-          "edits": [
-          [
-          "    private var overlayView: View? = null\n",
-          "    private var overlayView: View? = null\n    private var triggerChannel: MethodChannel? = null\n    private var pendingStartVoice: Boolean = false\n"
-          ],
-          [
-          "        registerAccessibilityChannel(flutterEngine, this)\n    }\n",
-          "        registerAccessibilityChannel(flutterEngine, this)\n\n        // External trigger (Tasker / automation apps): intent START_VOICE\n        pendingStartVoice = isStartVoiceIntent(intent)\n        triggerChannel = MethodChannel(flutterEngine.dartExecutor.binaryMessenger, \"com.privateagent/external_trigger\")\n        triggerChannel?.setMethodCallHandler { call, result ->\n            when (call.method) {\n                \"consumeInitialTrigger\" -> {\n                    val pending = pendingStartVoice\n                    pendingStartVoice = false\n                    result.success(pending)\n                }\n                \"getDeviceState\" -> {\n                    val pm = getSystemService(android.content.Context.POWER_SERVICE) as android.os.PowerManager\n                    val bm = getSystemService(android.content.Context.BATTERY_SERVICE) as android.os.BatteryManager\n                    result.success(mapOf(\"screenOn\" to pm.isInteractive, \"charging\" to bm.isCharging))\n                }\n                else -> result.notImplemented()\n            }\n        }\n    }\n\n    private fun isStartVoiceIntent(i: Intent?): Boolean {\n        return i?.action == \"com.orailnoor.privateagent.START_VOICE\"\n    }\n\n    override fun onNewIntent(intent: Intent) {\n        super.onNewIntent(intent)\n        if (isStartVoiceIntent(intent)) {\n            triggerChannel?.invokeMethod(\"startVoice\", null)\n        }\n    }\n"
-          ]
-          ]
-          },
-          "android/app/src/main/AndroidManifest.xml": {
-          "marker": "com.orailnoor.privateagent.START_VOICE",
-          "edits": [
-          [
-          "                <category android:name=\"android.intent.category.LAUNCHER\"/>\n            </intent-filter>\n",
-          "                <category android:name=\"android.intent.category.LAUNCHER\"/>\n            </intent-filter>\n            <!-- External trigger: automation apps (Tasker, MacroDroid...) start voice input -->\n            <intent-filter>\n                <action android:name=\"com.orailnoor.privateagent.START_VOICE\" />\n                <category android:name=\"android.intent.category.DEFAULT\" />\n            </intent-filter>\n"
-          ]
-          ]
-          },
-          "lib/services/task_executor.dart": {
-          "marker": "_clickSmart",
-          "edits": [
-          [
-          "        case 'click_text':\n          final text = params['text'] as String? ?? '';\n          success = await _screenService.clickByText(text);\n",
-          "        case 'click_text':\n          final text = params['text'] as String? ?? '';\n          success = await _clickSmart(text);\n"
-          ],
-          [
-          "          final text = params['text'] as String? ?? '';\n          final hint = params['field_hint'] as String?;\n          success = await _screenService.typeText(text, fieldHint: hint);\n          actionResult = success ? 'Typed \"$text\"' : 'Could not type text';\n",
-          "          final text = params['text'] as String? ?? '';\n          final hint = params['field_hint'] as String?;\n          success = await _screenService.typeText(text, fieldHint: hint);\n          actionResult = success ? 'Typed \"$text\"' : 'Could not type text';\n          if (success && await _autoSubmitIfSearchField(hint)) {\n            actionResult = 'Typed \"$text\" and submitted the search';\n          }\n"
-          ],
-          [
-          "- After typing a search query, use `press_enter` once. If the screen does not change, click the exact visible suggestion text. Do not repeat the same submit action more than twice.\n",
-          "- After typing a search query, use `press_enter` once. If the screen does not change, click the exact visible suggestion text. Do not repeat the same submit action more than twice.\n- If the previous action result says the search was submitted, do NOT press_enter again. Look at the new screen and pick a result.\n"
-          ],
-          [
-          "      final recovery = await _recoveryEngine.diagnose(action, screenContent);\n",
-          "      final recovery = await _recoveryEngine.diagnose(\n        action,\n        screenContent,\n        failureCount: consecutiveFailures,\n      );\n"
-          ],
-          [
-          "          final dir = recovery.params['direction'] ?? 'down';\n          if (dir == 'down') {\n            await _shizukuService.runCommand(\n              'input swipe 540 1800 540 600 600',\n            );\n          } else {\n            await _shizukuService.runCommand(\n              'input swipe 540 600 540 1800 600',\n            );\n          }\n",
-          "          final dir = (recovery.params['direction'] ?? 'down').toString();\n          await _performScroll(dir);\n"
-          ],
-          [
-          "  void _report(String message) {\n",
-          "  /// Removes the \"...\" the screen dump adds to truncated labels.\n  String _stripEllipsis(String text) {\n    var t = text.trim();\n    while (t.endsWith('...') || t.endsWith('\\u2026')) {\n      t = t.endsWith('...')\n          ? t.substring(0, t.length - 3)\n          : t.substring(0, t.length - 1);\n      t = t.trim();\n    }\n    return t;\n  }\n\n  int _commonPrefixLength(String a, String b) {\n    final n = a.length < b.length ? a.length : b.length;\n    var i = 0;\n    while (i < n && a.codeUnitAt(i) == b.codeUnitAt(i)) {\n      i++;\n    }\n    return i;\n  }\n\n  /// Click by text. If that fails, retry without the truncation dots, then\n  /// fall back to tapping the center of the best-matching element found in\n  /// the current screen dump.\n  Future<bool> _clickSmart(String text) async {\n    if (await _screenService.clickByText(text)) return true;\n\n    final cleaned = _stripEllipsis(text);\n    if (cleaned.isEmpty) return false;\n    if (cleaned != text && await _screenService.clickByText(cleaned)) {\n      return true;\n    }\n\n    try {\n      final nodes = await _screenService.dumpScreen();\n      final target = cleaned.toLowerCase();\n      double bestScore = 0;\n      double bestX = 0;\n      double bestY = 0;\n\n      for (final node in nodes) {\n        final bounds = node['bounds'];\n        if (bounds is! Map) continue;\n        final left = (bounds['left'] as num?)?.toDouble() ?? 0;\n        final top = (bounds['top'] as num?)?.toDouble() ?? 0;\n        final right = (bounds['right'] as num?)?.toDouble() ?? 0;\n        final bottom = (bounds['bottom'] as num?)?.toDouble() ?? 0;\n        if (right <= left || bottom <= top) continue;\n\n        for (final raw in [node['text'], node['contentDescription']]) {\n          final label = (raw is String ? raw : '').trim().toLowerCase();\n          if (label.isEmpty) continue;\n\n          double score = 0;\n          if (label.contains(target)) {\n            score = 3;\n          } else if (label.length >= 6 && target.contains(label)) {\n            score = 2;\n          } else if (_commonPrefixLength(label, target) >= 12) {\n            score = 1;\n          }\n          if (score > 0 && node['isClickable'] == true) score += 0.5;\n\n          if (score > bestScore) {\n            bestScore = score;\n            bestX = (left + right) / 2;\n            bestY = (top + bottom) / 2;\n          }\n        }\n      }\n\n      if (bestScore > 0) {\n        return await _screenService.clickAt(bestX, bestY);\n      }\n    } catch (_) {}\n    return false;\n  }\n\n  /// After typing, presses the search/Enter key when the field is a search box\n  /// (recognized by its view id or label), so the search starts right away.\n  Future<bool> _autoSubmitIfSearchField(String? hint) async {\n    try {\n      final searchWords = RegExp(\n        r'search|cari|telusuri|find|query|url_bar|omnibox',\n        caseSensitive: false,\n      );\n      var isSearch = hint != null && searchWords.hasMatch(hint);\n\n      if (!isSearch) {\n        final nodes = await _screenService.dumpScreen();\n        for (final node in nodes) {\n          if (node['isEditable'] != true) continue;\n          final idAndLabel = '${node['viewId'] ?? ''} '\n              '${node['contentDescription'] ?? ''}';\n          if (searchWords.hasMatch(idAndLabel)) {\n            isSearch = true;\n            break;\n          }\n        }\n      }\n      if (!isSearch) return false;\n\n      await Future.delayed(const Duration(milliseconds: 600));\n      final ok = await _submitKeyboardAction();\n      if (ok) await Future.delayed(const Duration(milliseconds: 1500));\n      return ok;\n    } catch (_) {\n      return false;\n    }\n  }\n\n  void _report(String message) {\n"
-          ]
-          ]
-          }
-          }
-          EDITS_JSON
-          cat > /tmp/apply_patch.py <<'APPLY_PY'
-          import json, sys
-          data = json.load(open(sys.argv[1], encoding="utf-8"))
-          for path, spec in data.items():
-              s = open(path, encoding="utf-8").read()
-              if spec["marker"] in s:
-                  print("SUDAH TERPATCH:", path)
-                  continue
-              for old, new in spec["edits"]:
-                  if s.count(old) != 1:
-                      sys.exit("GAGAL: potongan tidak ditemukan tepat sekali di %s: %r" % (path, old[:70]))
-                  s = s.replace(old, new)
-              open(path, "w", encoding="utf-8").write(s)
-              print("DIPATCH:", path)
-          APPLY_PY
-          python3 /tmp/apply_patch.py /tmp/edits.json
-          cat > lib/services/voice_service.dart <<'VOICE_DART'
-          import 'package:speech_to_text/speech_to_text.dart' as stt;
-          import 'package:speech_to_text/speech_recognition_result.dart';
-          import 'package:flutter_tts/flutter_tts.dart';
-          import 'package:shared_preferences/shared_preferences.dart';
-          import 'voice_settings.dart';
-
-          class VoiceService {
-            final stt.SpeechToText _speech = stt.SpeechToText();
-            final FlutterTts _tts = FlutterTts();
-            bool _isInitialized = false;
-            bool _isListening = false;
-            bool _listenersAttached = false;
-
-            bool get isListening => _isListening;
-
-            Future<void> init() async {
-              if (_isInitialized) return;
-
-              _isInitialized = await _speech.initialize(
-                onError: (error) {
-                  _isListening = false;
-                  VoiceSettings.listening.value = false;
-                },
-                onStatus: (status) {
-                  // Added: lets the hot word resume when listening ends silently.
-                  if (status == 'done' || status == 'notListening') {
-                    VoiceSettings.listening.value = false;
-                  }
-                },
-              );
-
-              // Configure TTS (defaults identical to the original app)
-              await _tts.setLanguage('en-US');
-              await _tts.setSpeechRate(0.5);
-              await _tts.setVolume(1.0);
-              await _tts.setPitch(1.0);
-
-              // --- Added: saved TTS options, mute, speaking state ---
-              await VoiceSettings.loadMuted();
-              _tts.setStartHandler(() => VoiceSettings.speaking.value = true);
-              _tts.setCompletionHandler(() => VoiceSettings.speaking.value = false);
-              _tts.setCancelHandler(() => VoiceSettings.speaking.value = false);
-              _tts.setErrorHandler((message) => VoiceSettings.speaking.value = false);
-              await _applySavedTtsSettings();
-              if (!_listenersAttached) {
-                _listenersAttached = true;
-                VoiceSettings.muted.addListener(_onMuteChanged);
-                VoiceSettings.ttsRevision.addListener(_onTtsChanged);
-              }
-            }
-
-            /// Applies the TTS options saved from Settings. With nothing saved this
-            /// leaves the original defaults (en-US, rate 0.5, pitch 1.0) untouched.
-            Future<void> _applySavedTtsSettings() async {
-              final prefs = await SharedPreferences.getInstance();
-
-              final engine = prefs.getString(VoiceSettings.keyEngine);
-              if (engine != null && engine.isNotEmpty) {
-                try {
-                  await _tts.setEngine(engine);
-                } catch (_) {}
-              }
-
-              final language =
-                  prefs.getString(VoiceSettings.keyLanguage) ??
-                  VoiceSettings.defaultLanguage;
-              try {
-                await _tts.setLanguage(language);
-              } catch (_) {}
-
-              final voiceName = prefs.getString(VoiceSettings.keyVoiceName);
-              final voiceLocale = prefs.getString(VoiceSettings.keyVoiceLocale);
-              if (voiceName != null && voiceLocale != null) {
-                try {
-                  await _tts.setVoice({'name': voiceName, 'locale': voiceLocale});
-                } catch (_) {}
-              }
-
-              await _tts.setSpeechRate(
-                prefs.getDouble(VoiceSettings.keyRate) ?? VoiceSettings.defaultRate,
-              );
-              await _tts.setPitch(
-                prefs.getDouble(VoiceSettings.keyPitch) ?? VoiceSettings.defaultPitch,
-              );
-              await _tts.setVolume(1.0);
-            }
-
-            void _onTtsChanged() {
-              _applySavedTtsSettings();
-            }
-
-            void _onMuteChanged() {
-              if (VoiceSettings.muted.value) {
-                _tts.stop();
-                VoiceSettings.speaking.value = false;
-              }
-            }
-
-            /// Start listening for speech. Returns transcribed text via callback.
-            Future<void> startListening({
-              required Function(String) onResult,
-              required Function() onDone,
-            }) async {
-              if (!_isInitialized) await init();
-              if (!_isInitialized) return;
-
-              _isListening = true;
-              VoiceSettings.listening.value = true;
-
-              // Added: make sure the hot word has released the microphone.
-              final release = VoiceSettings.beforeListen;
-              if (release != null) {
-                try {
-                  await release();
-                } catch (_) {}
-              }
-
-              await _speech.listen(
-                onResult: (SpeechRecognitionResult result) {
-                  if (result.finalResult) {
-                    _isListening = false;
-                    VoiceSettings.listening.value = false;
-                    onResult(result.recognizedWords);
-                    onDone();
-                  }
-                },
-                listenOptions: stt.SpeechListenOptions(
-                  listenMode: stt.ListenMode.confirmation,
-                  partialResults: false,
-                ),
-              );
-            }
-
-            /// Stop listening
-            Future<void> stopListening() async {
-              _isListening = false;
-              VoiceSettings.listening.value = false;
-              await _speech.stop();
-            }
-
-            /// Speak text aloud (silent while muted)
-            Future<void> speak(String text) async {
-              if (text.isEmpty) return;
-              if (VoiceSettings.muted.value) return;
-              await _tts.speak(text);
-            }
-
-            /// Stop speaking
-            Future<void> stopSpeaking() async {
-              await _tts.stop();
-            }
-
-            void dispose() {
-              if (_listenersAttached) {
-                VoiceSettings.muted.removeListener(_onMuteChanged);
-                VoiceSettings.ttsRevision.removeListener(_onTtsChanged);
-                _listenersAttached = false;
-              }
-              _speech.stop();
-              _tts.stop();
-            }
-          }
-          VOICE_DART
-          cat > lib/services/external_trigger_service.dart <<'ETS_DART'
-          import 'package:flutter/foundation.dart';
-          import 'package:flutter/services.dart';
-          import 'package:shared_preferences/shared_preferences.dart';
-
-          /// Lets automation apps (Tasker with a hotword plugin, MacroDroid, adb, ...)
-          /// start the app's voice input by sending the intent
-          /// `com.orailnoor.privateagent.START_VOICE` to MainActivity.
-          class ExternalTriggerService {
-            ExternalTriggerService._();
-            static final ExternalTriggerService instance = ExternalTriggerService._();
-
-            static const String actionName = 'com.orailnoor.privateagent.START_VOICE';
-            static const String packageName = 'com.orailnoor.privateagent';
-            static const String className = 'com.orailnoor.privateagent.MainActivity';
-
-            static const String keyEnabled = 'external_trigger_enabled';
-            static const String keyMode = 'external_trigger_mode';
-            static const String modeAlways = 'always';
-            static const String modeScreenOn = 'screen_on';
-            static const String modeCharging = 'charging';
-
-            static const MethodChannel _channel = MethodChannel(
-              'com.privateagent/external_trigger',
-            );
-
-            /// Called when an accepted trigger arrives (starts voice input).
-            VoidCallback? onTrigger;
-            bool _initialized = false;
-
-            /// Starts listening for triggers sent while the app is already running.
-            void init() {
-              if (_initialized) return;
-              _initialized = true;
-              _channel.setMethodCallHandler((call) async {
-                if (call.method == 'startVoice') {
-                  await handleTrigger();
-                }
-                return null;
-              });
-            }
-
-            /// Handles a trigger that launched the app from scratch.
-            Future<void> checkInitialTrigger() async {
-              try {
-                final pending =
-                    await _channel.invokeMethod<bool>('consumeInitialTrigger') ?? false;
-                if (pending) await handleTrigger();
-              } catch (_) {}
-            }
-
-            /// Returns null when a trigger should run, otherwise a short reason why it
-            /// would be ignored (feature off, screen off, not charging).
-            Future<String?> evaluate() async {
-              final prefs = await SharedPreferences.getInstance();
-              if (!(prefs.getBool(keyEnabled) ?? false)) {
-                return 'Ignored: external trigger is turned off.';
-              }
-              final mode = prefs.getString(keyMode) ?? modeAlways;
-              if (mode == modeAlways) return null;
-
-              var screenOn = true;
-              var charging = false;
-              try {
-                final state = await _channel.invokeMapMethod<String, dynamic>(
-                  'getDeviceState',
-                );
-                screenOn = state?['screenOn'] == true;
-                charging = state?['charging'] == true;
-              } catch (_) {}
-
-              if (mode == modeScreenOn && !screenOn) return 'Ignored: screen is off.';
-              if (mode == modeCharging && !charging) {
-                return 'Ignored: device is not charging.';
-              }
-              return null;
-            }
-
-            Future<void> handleTrigger() async {
-              final reason = await evaluate();
-              if (reason == null) onTrigger?.call();
-            }
-          }
-          ETS_DART
-          mkdir -p lib/widgets
-          cat > lib/widgets/external_trigger_section.dart <<'ETSEC_DART'
-          import 'package:flutter/material.dart';
-          import 'package:flutter/services.dart';
-          import 'package:shared_preferences/shared_preferences.dart';
-
-          import '../services/external_trigger_service.dart';
-          import 'voice_settings_section.dart' show SettingsCardBuilder;
-
-          /// Settings card for the external trigger (Tasker hotword plugin etc.).
-          class ExternalTriggerSection extends StatefulWidget {
-            final SettingsCardBuilder buildCard;
-            final bool isDark;
-
-            const ExternalTriggerSection({
-              super.key,
-              required this.buildCard,
-              required this.isDark,
-            });
-
-            @override
-            State<ExternalTriggerSection> createState() => _ExternalTriggerSectionState();
-          }
-
-          class _ExternalTriggerSectionState extends State<ExternalTriggerSection> {
-            bool _enabled = false;
-            String _mode = ExternalTriggerService.modeAlways;
-            bool _loading = true;
-
-            @override
-            void initState() {
-              super.initState();
-              _load();
-            }
-
-            Future<void> _load() async {
-              final prefs = await SharedPreferences.getInstance();
-              _enabled = prefs.getBool(ExternalTriggerService.keyEnabled) ?? false;
-              _mode =
-                  prefs.getString(ExternalTriggerService.keyMode) ??
-                  ExternalTriggerService.modeAlways;
-              if (mounted) setState(() => _loading = false);
-            }
-
-            Future<void> _save() async {
-              final prefs = await SharedPreferences.getInstance();
-              await prefs.setBool(ExternalTriggerService.keyEnabled, _enabled);
-              await prefs.setString(ExternalTriggerService.keyMode, _mode);
-            }
-
-            void _snack(String message) {
-              if (!mounted) return;
-              ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(message)));
-            }
-
-            Future<void> _test() async {
-              final reason = await ExternalTriggerService.instance.evaluate();
-              if (reason == null) {
-                _snack('Trigger accepted: starting voice input.');
-                ExternalTriggerService.instance.onTrigger?.call();
-              } else {
-                _snack(reason);
-              }
-            }
-
-            @override
-            Widget build(BuildContext context) {
-              if (_loading) return const SizedBox.shrink();
-
-              return widget.buildCard(
-                icon: Icons.extension_outlined,
-                title: 'Tasker hotword plugin',
-                subtitle: 'Let Tasker (or another automation app) start voice input',
-                isDark: widget.isDark,
-                children: [
-                  SwitchListTile(
-                    title: const Text('Enable external trigger'),
-                    subtitle: const Text(
-                      'When off, trigger intents from other apps are ignored.',
-                    ),
-                    value: _enabled,
-                    contentPadding: EdgeInsets.zero,
-                    onChanged: (v) async {
-                      setState(() => _enabled = v);
-                      await _save();
-                    },
-                  ),
-                  const SizedBox(height: 8),
-                  InputDecorator(
-                    decoration: InputDecoration(
-                      labelText: 'Active when',
-                      border: OutlineInputBorder(
-                        borderRadius: BorderRadius.circular(12),
-                      ),
-                      contentPadding: const EdgeInsets.symmetric(
-                        horizontal: 12,
-                        vertical: 4,
-                      ),
-                    ),
-                    child: DropdownButtonHideUnderline(
-                      child: DropdownButton<String>(
-                        isExpanded: true,
-                        value: _mode,
-                        items: const [
-                          DropdownMenuItem(
-                            value: ExternalTriggerService.modeAlways,
-                            child: Text('Always'),
-                          ),
-                          DropdownMenuItem(
-                            value: ExternalTriggerService.modeScreenOn,
-                            child: Text('Only when the screen is on'),
-                          ),
-                          DropdownMenuItem(
-                            value: ExternalTriggerService.modeCharging,
-                            child: Text('Only while charging'),
-                          ),
-                        ],
-                        onChanged: (v) async {
-                          if (v == null) return;
-                          setState(() => _mode = v);
-                          await _save();
-                        },
-                      ),
-                    ),
-                  ),
-                  const SizedBox(height: 8),
-                  const Text(
-                    'This only decides whether a trigger is accepted. The hotword '
-                    'plugin itself keeps listening inside Tasker, so to save battery '
-                    'also limit the plugin\'s profile in Tasker (for example with a '
-                    'Display State = On condition).',
-                    style: TextStyle(fontSize: 12),
-                  ),
-                  const SizedBox(height: 12),
-                  const Text(
-                    'Tasker setup: Action > System > Send Intent',
-                    style: TextStyle(fontWeight: FontWeight.w600),
-                  ),
-                  const SelectableText(
-                    'Action: ${ExternalTriggerService.actionName}\n'
-                    'Package: ${ExternalTriggerService.packageName}\n'
-                    'Class: ${ExternalTriggerService.className}\n'
-                    'Target: Activity',
-                    style: TextStyle(fontSize: 12),
-                  ),
-                  const SizedBox(height: 8),
-                  Wrap(
-                    spacing: 8,
-                    children: [
-                      OutlinedButton.icon(
-                        onPressed: _test,
-                        icon: const Icon(Icons.play_arrow_rounded, size: 18),
-                        label: const Text('Test trigger'),
-                      ),
-                      OutlinedButton.icon(
-                        onPressed: () async {
-                          await Clipboard.setData(
-                            const ClipboardData(text: ExternalTriggerService.actionName),
-                          );
-                          _snack('Action copied.');
-                        },
-                        icon: const Icon(Icons.copy_rounded, size: 18),
-                        label: const Text('Copy action'),
-                      ),
-                    ],
-                  ),
-                ],
-              );
-            }
-          }
-          ETSEC_DART
-          cat > lib/services/recovery_engine.dart <<'RECOVERY_DART'
-          class RecoveryAction {
-            final String action;
-            final Map<String, dynamic> params;
-            final String description;
-
-            RecoveryAction({
-              required this.action,
-              required this.params,
-              required this.description,
-            });
-          }
-
-          class RecoveryEngine {
-            /// Diagnoses the failure and suggests a recovery action based on the last
-            /// action and current screen dump.
-            ///
-            /// [failureCount] is how many times in a row the same action has failed.
-            /// Going Back is only used after repeated failures, so a single failed
-            /// click no longer throws the agent out of the screen it is working on.
-            Future<RecoveryAction> diagnose(
-              String lastFailedAction,
-              String screenContent, {
-              int failureCount = 1,
-            }) async {
-              final lowerScreen = screenContent.toLowerCase();
-
-              // 1. A real loading indicator is visible -> wait
-              if (RegExp(r'\b(progressbar|spinner|loading)\b').hasMatch(lowerScreen)) {
-                return RecoveryAction(
-                  action: 'wait',
-                  params: {},
-                  description: 'App seems to be loading, waiting...',
-                );
-              }
-
-              // 2. Keyboard is likely covering elements -> Press back to dismiss
-              //    (only on the first failures, so we do not keep pressing back)
-              if (failureCount <= 2 &&
-                  (lowerScreen.contains('gboard') || lowerScreen.contains('keyboard'))) {
-                return RecoveryAction(
-                  action: 'press_back',
-                  params: {},
-                  description: 'Keyboard might be blocking the screen, dismissing it.',
-                );
-              }
-
-              // 3. A click failed: look further down/up the same screen instead of
-              //    leaving it. The compressed screen dump marks scrollable elements
-              //    with a "scroll" tag, the full dump with "scrollable".
-              if (lastFailedAction == 'click_text' || lastFailedAction == 'click_at') {
-                final scrollable =
-                    lowerScreen.contains('scrollable') ||
-                    RegExp(r'[\[,]scroll[\],]').hasMatch(lowerScreen);
-                if (scrollable && failureCount <= 3) {
-                  return RecoveryAction(
-                    action: 'scroll',
-                    params: {'direction': failureCount >= 3 ? 'up' : 'down'},
-                    description: 'Click failed, scrolling to look for the target.',
-                  );
-                }
-                if (failureCount <= 2) {
-                  return RecoveryAction(
-                    action: 'wait',
-                    params: {},
-                    description: 'Click failed, waiting and re-reading the screen.',
-                  );
-                }
-                return RecoveryAction(
-                  action: 'press_back',
-                  params: {},
-                  description: 'Click failed repeatedly, pressing back to try another way.',
-                );
-              }
-
-              // 4. Could not open the app -> go home to try a different approach
-              if (lastFailedAction == 'open_app') {
-                return RecoveryAction(
-                  action: 'press_home',
-                  params: {},
-                  description: 'Failed to open app, going home to try a different approach.',
-                );
-              }
-
-              // 5. Generic failure: retry on the same screen first, back only if it persists
-              if (failureCount <= 2) {
-                return RecoveryAction(
-                  action: 'wait',
-                  params: {},
-                  description: 'Action failed, waiting and retrying on the same screen.',
-                );
-              }
-              return RecoveryAction(
-                action: 'press_back',
-                params: {},
-                description: 'Repeated failure, pressing back to recover.',
-              );
-            }
-          }
-          RECOVERY_DART
+          cat > /tmp/bundle.b64 <<'BUNDLE_B64'
+          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
+          4ecWP/8L7K2ZOQBAAQA=
+          BUNDLE_B64
+          base64 -d /tmp/bundle.b64 > /tmp/bundle.tgz
+          echo "9b2ad742085b8abe630ecb1a9e3c7bb61c5c7a96a92188d289009432034bdd17  /tmp/bundle.tgz" | sha256sum -c - || { echo 'Isi workflow tidak lengkap atau rusak saat ditempel. Tempel ulang seluruh file.'; exit 1; }
+          mkdir -p /tmp/bundle && tar xzf /tmp/bundle.tgz -C /tmp/bundle
+          python3 /tmp/bundle/patch/apply_patch.py /tmp/bundle/patch/edits.json
+          cp -r /tmp/bundle/files/. .
           echo "Patch selesai"
 
       - name: Verify patch is present
         run: |
           echo "=== Commit yang dibangun ==="
           git log -1 --format='%h %ad %s' --date=iso
-          echo "=== File patch ==="
-          ls -l lib/services/wake_word_service.dart lib/services/voice_settings.dart lib/widgets/voice_settings_section.dart
-          echo "=== Isi kunci ==="
-          grep -n "WakeWordService" lib/screens/home_screen.dart | head -3
-          grep -n "VoiceSettingsSection" lib/screens/settings_screen.dart | head -3
-          grep -n "open_wake_word\|assets/models" pubspec.yaml
-          grep -n "FOREGROUND_SERVICE_MICROPHONE" android/app/src/main/AndroidManifest.xml
+          echo "=== Pemeriksaan (gagal bila ada yang hilang) ==="
           grep -q "WakeWordService" lib/screens/home_screen.dart
-          grep -q "VoiceSettingsSection" lib/screens/settings_screen.dart
-          grep -q "VoiceSettings" lib/services/voice_service.dart
           grep -q "ExternalTriggerService" lib/screens/home_screen.dart
-          grep -q "ExternalTriggerSection" lib/screens/settings_screen.dart
-          grep -q "external_trigger" android/app/src/main/kotlin/com/orailnoor/privateagent/MainActivity.kt
+          grep -q "PluginHostService" lib/screens/home_screen.dart
+          grep -q "PluginHostSection" lib/screens/settings_screen.dart
+          grep -q "VoiceSettingsSection" lib/screens/settings_screen.dart
+          grep -q "PluginHostBridge" android/app/src/main/kotlin/com/orailnoor/privateagent/MainActivity.kt
+          grep -q "PluginHostService" android/app/src/main/AndroidManifest.xml
           grep -q "START_VOICE" android/app/src/main/AndroidManifest.xml
-          test -f lib/services/external_trigger_service.dart
-          test -f lib/widgets/external_trigger_section.dart
+          grep -q "FOREGROUND_SERVICE_MICROPHONE" android/app/src/main/AndroidManifest.xml
           grep -q "_clickSmart" lib/services/task_executor.dart
           grep -q "_autoSubmitIfSearchField" lib/services/task_executor.dart
           grep -q "failureCount" lib/services/recovery_engine.dart
+          grep -q "open_wake_word" pubspec.yaml
+          test -f lib/services/wake_word_service.dart
+          test -f lib/services/voice_settings.dart
+          test -f lib/widgets/voice_settings_section.dart
+          test -f lib/services/plugin_host_service.dart
+          test -f lib/widgets/plugin_host_section.dart
+          test -f android/app/src/main/kotlin/com/orailnoor/privateagent/PluginHostBridge.kt
+          test -f android/app/src/main/kotlin/com/orailnoor/privateagent/PluginHostService.kt
+          grep -q "openQuickSettings" lib/services/screen_automation_service.dart
+          grep -q "openQuickSettings" android/app/src/main/kotlin/com/orailnoor/privateagent/AgentAccessibilityService.kt
+          grep -q "_screenSummary" lib/services/task_executor.dart
+          grep -q "open_quick_settings" lib/services/task_executor.dart
+          ls -l assets/models
           echo "VERIFIKASI OK: semua perubahan ada"
 
       - name: Resolve dependencies
@@ -711,13 +323,13 @@ jobs:
 
       - name: Build universal APK
         run: |
-          flutter build apk --release --build-name=1.0.0-hotword4 --build-number=${{ github.run_number }}
+          flutter build apk --release --build-name=1.0.0-hotword6 --build-number=${{ github.run_number }}
           mkdir -p dist
           cp build/app/outputs/flutter-apk/app-release.apk dist/app-universal-release.apk
 
       - name: Build architecture-specific APKs
         run: |
-          flutter build apk --release --split-per-abi --build-name=1.0.0-hotword4 --build-number=${{ github.run_number }}
+          flutter build apk --release --split-per-abi --build-name=1.0.0-hotword6 --build-number=${{ github.run_number }}
           cp build/app/outputs/flutter-apk/app-arm64-v8a-release.apk dist/
           cp build/app/outputs/flutter-apk/app-armeabi-v7a-release.apk dist/
           cp build/app/outputs/flutter-apk/app-x86_64-release.apk dist/
