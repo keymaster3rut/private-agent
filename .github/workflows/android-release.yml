@@ -379,4 +379,4 @@ jobs:
       - uses: actions/upload-artifact@v4
         with:
           name: private-agent-android
-          path: dist/*w
+          path: dist/*
