@@ -489,7 +489,7 @@ jobs:
           echo "VERIFIKASI OK: semua perubahan ada"
 
        
-                - name: Apply New UI & Behavior Patches
+      - name: Apply New UI & Behavior Patches
         run: |
           cat > /tmp/inject_features.py <<'EOF'
           import os, re
@@ -538,7 +538,6 @@ jobs:
               with open(service, 'w') as f: f.write(content)
           EOF
           python3 /tmp/inject_features.py
-          
           echo "Injeksi fitur UI & Behavior baru berhasil diaplikasikan."
 
       - name: Resolve dependencies
