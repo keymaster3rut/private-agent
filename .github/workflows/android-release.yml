@@ -488,12 +488,13 @@ jobs:
           ls -l assets/models
           echo "VERIFIKASI OK: semua perubahan ada"
 
-      - name: Apply New UI & Behavior Patches
+       
+                - name: Apply New UI & Behavior Patches
         run: |
           cat > /tmp/inject_features.py <<'EOF'
           import os, re
 
-          # 1. Talkback (TTS) Setup di pubspec.yaml
+          # 1. Menambahkan dependensi TTS
           pubspec = 'pubspec.yaml'
           if os.path.exists(pubspec):
               with open(pubspec, 'r') as f: content = f.read()
@@ -501,40 +502,28 @@ jobs:
                   content = content.replace('dependencies:\n', 'dependencies:\n  flutter_tts: ^3.8.3\n')
                   with open(pubspec, 'w') as f: f.write(content)
 
-          # 2. Patch Mode Default Agent & Idle Timer 5 Menit di home_screen.dart
+          # 2. Injeksi Mode Default & Timer Idle 5 Menit
           home = 'lib/screens/home_screen.dart'
           if os.path.exists(home):
               with open(home, 'r') as f: content = f.read()
               content = re.sub(r"String\s+_mode\s*=\s*['\"]chat['\"]", "String _mode = 'agent'", content)
               if 'Timer? _idleResetTimer' not in content:
                   content = "import 'dart:async';\n" + content
-                  timer_logic = """
-            Timer? _idleResetTimer;
-            void _startOrResetIdleTimer() {
-              _idleResetTimer?.cancel();
-              _idleResetTimer = Timer(const Duration(minutes: 5), () {
-                setState(() { _mode = 'agent'; }); // Trigger reset
-              });
-            }
-          """
-                  content = re.sub(r'(class\s+_HomeScreenState\s+extends\s+State<HomeScreen>\s*\{)', r'\1\n' + timer_logic, content)
+                  timer_logic = "\n  Timer? _idleResetTimer;\n  void _startOrResetIdleTimer() { _idleResetTimer?.cancel(); _idleResetTimer = Timer(const Duration(minutes: 5), () { if(mounted) setState(() { _mode = 'agent'; }); }); }\n"
+                  content = re.sub(r'(class\s+_HomeScreenState\s+extends\s+State<HomeScreen>\s*\{)', r'\1' + timer_logic, content)
               with open(home, 'w') as f: f.write(content)
 
-          # 3. Patch Talkback di task_executor.dart
+          # 3. Injeksi Talkback (Hanya saat tugas dimulai agar aman)
           task = 'lib/services/task_executor.dart'
           if os.path.exists(task):
               with open(task, 'r') as f: content = f.read()
               if 'flutter_tts' not in content:
                   content = "import 'package:flutter_tts/flutter_tts.dart';\n" + content
-                  tts_init = "final FlutterTts _tts = FlutterTts();\n"
-                  content = re.sub(r'(class\s+TaskExecutor\s*\{)', r'\1\n  ' + tts_init, content)
-                  # Inject "Permintaan diproses"
-                  content = re.sub(r'(Future<void>\s+executeTask.*?\{)', r'\1\n    await _tts.speak("Permintaan sedang diproses");', content)
-                  # Inject "Tugas selesai"
-                  content = re.sub(r'(//\s*Task\s*completed.*?|return;)', r'await _tts.speak("Tugas selesai");\n    \1', content)
+                  content = re.sub(r'(class\s+TaskExecutor\s*\{)', r'\1\n  final FlutterTts _tts = FlutterTts();', content)
+                  content = re.sub(r'(Future<void>\s+executeTask\s*\([^)]*\)\s*async\s*\{)', r'\1\n    _tts.speak("Permintaan sedang diproses");', content)
               with open(task, 'w') as f: f.write(content)
 
-          # 4. Patch Tombol Berhenti di Panel Notifikasi (Android Foreground Service)
+          # 4. Tombol Berhenti pada Background Service Android
           service = 'android/app/src/main/kotlin/com/orailnoor/privateagent/PluginHostService.kt'
           if os.path.exists(service):
               with open(service, 'r') as f: content = f.read()
@@ -544,11 +533,12 @@ jobs:
                   val stopPendingIntent = android.app.PendingIntent.getService(this, 0, stopIntent, android.app.PendingIntent.FLAG_IMMUTABLE or android.app.PendingIntent.FLAG_UPDATE_CURRENT)
                   val stopAction = androidx.core.app.NotificationCompat.Action.Builder(android.R.drawable.ic_delete, "Berhenti", stopPendingIntent).build()
                   """
-                  content = re.sub(r'(val\s+notification\s*=\s*NotificationCompat\.Builder.*?\n)', r'\1' + stop_action, content)
-                  content = re.sub(r'(\.setContentText\(.*?\))', r'\1\n        .addAction(stopAction)', content)
+                  content = re.sub(r'(val\s+notification\s*=\s*NotificationCompat\.Builder)', stop_action + r'\n        \1', content)
+                  content = re.sub(r'(\.setContentText\(.*?\))', r'\1\n            .addAction(stopAction)', content)
               with open(service, 'w') as f: f.write(content)
           EOF
           python3 /tmp/inject_features.py
+          
           echo "Injeksi fitur UI & Behavior baru berhasil diaplikasikan."
 
       - name: Resolve dependencies
